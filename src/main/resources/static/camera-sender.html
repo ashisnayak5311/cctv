@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Share a camera - CCTV</title>
+    <style>
+        :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #111827; color: #f9fafb; }
+        body { box-sizing: border-box; max-width: 800px; margin: 0 auto; padding: 24px; }
+        video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; object-fit: contain; border-radius: 12px; }
+        label { display: block; margin: 16px 0; }
+        input { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px; font: inherit; }
+        button { border: 0; border-radius: 8px; padding: 12px 20px; color: white; background: #2563eb; font: inherit; cursor: pointer; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        #stop { background: #991b1b; }
+        #status { color: #d1d5db; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Share this laptop's camera</h1>
+    <p>This page requires HTTPS (or localhost) to access the camera. For Local mode, start the server with
+        <code>start-cctv-https.ps1</code> and open this page at <code>https://SERVER-IP:8443/camera-sender.html</code>.</p>
+    <p>Keep this page open while sharing. Video is sent to the CCTV server and recorded there as a separate camera.</p>
+    <video id="preview" autoplay muted playsinline></video>
+    <label for="camera-id">Camera name (use a different name for each laptop)</label>
+    <input id="camera-id" value="second-laptop" maxlength="40" pattern="[A-Za-z0-9_-]+">
+    <p><button id="start" type="button">Start sharing</button> <button id="stop" type="button" disabled>Stop sharing</button></p>
+    <p id="status" role="status" aria-live="polite">Allow camera access when your browser prompts to start sharing.</p>
+</main>
+<script>
+    const preview = document.getElementById('preview');
+    const cameraIdInput = document.getElementById('camera-id');
+    const startButton = document.getElementById('start');
+    const stopButton = document.getElementById('stop');
+    const status = document.getElementById('status');
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    let cameraStream;
+    let stopped = false;
+
+    async function sendFrames() {
+        while (!stopped && cameraStream) {
+            if (preview.videoWidth > 0 && preview.videoHeight > 0) {
+                canvas.width = Math.min(preview.videoWidth, 1280);
+                canvas.height = Math.round(preview.videoHeight * canvas.width / preview.videoWidth);
+                context.drawImage(preview, 0, 0, canvas.width, canvas.height);
+                const jpeg = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.78));
+                if (!jpeg) {
+                    throw new Error('Could not encode a camera frame.');
+                }
+                const response = await fetch(`/cameras/${encodeURIComponent(cameraIdInput.value)}/frame`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'image/jpeg', 'X-XSRF-TOKEN': csrfToken },
+                    body: jpeg
+                });
+                if (!response.ok) {
+                    throw new Error(response.status === 401 || response.status === 403
+                        ? 'Session expired or access denied. Sign in again and restart sharing.'
+                        : `The server rejected a camera frame (HTTP ${response.status}).`);
+                }
+                status.textContent = 'Sharing live video. Keep this page open.';
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    }
+
+    let csrfToken;
+    async function startSharing() {
+        const cameraId = cameraIdInput.value.trim();
+        if (!/^[A-Za-z0-9_-]{1,40}$/.test(cameraId)) {
+            throw new Error('Use 1–40 letters, numbers, underscores, or hyphens for the camera name.');
+        }
+        const tokenResponse = await fetch('/csrf');
+        if (!tokenResponse.ok) {
+            throw new Error('Could not get a security token. Sign in and try again.');
+        }
+        csrfToken = (await tokenResponse.json()).token;
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, frameRate: { ideal: 10, max: 10 } },
+            audio: false
+        });
+        preview.srcObject = cameraStream;
+        await preview.play();
+        stopped = false;
+        startButton.disabled = true;
+        stopButton.disabled = false;
+        cameraIdInput.disabled = true;
+        await sendFrames();
+    }
+
+    function stopSharing() {
+        stopped = true;
+        if (cameraStream) {
+            cameraStream.getTracks().forEach(track => track.stop());
+            cameraStream = null;
+        }
+        preview.srcObject = null;
+        startButton.disabled = false;
+        stopButton.disabled = true;
+        cameraIdInput.disabled = false;
+        status.textContent = 'Sharing stopped. The server will finalize the recording shortly.';
+    }
+
+    startButton.addEventListener('click', async () => {
+        startButton.disabled = true;
+        status.textContent = 'Requesting camera access…';
+        try {
+            await startSharing();
+        } catch (error) {
+            stopSharing();
+            status.textContent = error.message;
+        }
+    });
+    stopButton.addEventListener('click', stopSharing);
+    window.addEventListener('pagehide', stopSharing);
+    startButton.click();
+</script>
+</body>
+</html>

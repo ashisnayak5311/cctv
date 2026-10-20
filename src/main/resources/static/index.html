@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CCTV Live View</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            font-family: system-ui, sans-serif;
+            background: #111827;
+            color: #f9fafb;
+        }
+
+        body {
+            box-sizing: border-box;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 1.5rem;
+        }
+
+        .viewer {
+            aspect-ratio: 16 / 9;
+            overflow: hidden;
+            background: #000;
+            border-radius: 12px;
+        }
+
+        .cameras {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .cameras figure {
+            min-width: 0;
+            margin: 0;
+        }
+
+        .cameras figcaption {
+            margin-bottom: 8px;
+            color: #d1d5db;
+        }
+
+        .camera-stream {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        #stream {
+            transform: scale(1);
+            transform-origin: center;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-top: 16px;
+            flex-wrap: wrap;
+        }
+
+        .zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .picture-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .picture-control {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #d1d5db;
+            font-size: 0.9rem;
+        }
+
+        .picture-control input {
+            width: min(22vw, 120px);
+            accent-color: #60a5fa;
+        }
+
+        .picture-control output {
+            min-width: 4ch;
+            font-variant-numeric: tabular-nums;
+        }
+
+        button {
+            border: 0;
+            border-radius: 8px;
+            padding: 12px 20px;
+            color: white;
+            background: #dc2626;
+            font: inherit;
+            font-weight: 650;
+            cursor: pointer;
+        }
+
+        .zoom-controls button {
+            width: 44px;
+            height: 44px;
+            padding: 0;
+            background: #374151;
+            font-size: 1.25rem;
+        }
+
+        .zoom-controls button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        #zoom {
+            width: min(28vw, 160px);
+            accent-color: #60a5fa;
+        }
+
+        #zoom-level {
+            min-width: 4ch;
+            color: #d1d5db;
+            font-variant-numeric: tabular-nums;
+        }
+
+        button[aria-pressed="true"] {
+            background: #374151;
+        }
+
+        #shutdown {
+            background: #991b1b;
+        }
+
+        #status {
+            color: #d1d5db;
+        }
+
+        .hint {
+            color: #9ca3af;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>CCTV Live View</h1>
+    <div class="cameras">
+        <figure>
+            <figcaption>This laptop</figcaption>
+            <div class="viewer">
+                <img id="stream" class="camera-stream" src="/stream" alt="This laptop's live camera stream">
+            </div>
+        </figure>
+        <figure>
+            <figcaption>Second laptop</figcaption>
+            <div class="viewer">
+                <img class="camera-stream" src="/cameras/second-laptop/stream"
+                     alt="Second laptop's live camera stream">
+            </div>
+        </figure>
+    </div>
+    <details class="hint">
+        <summary>Connect a second laptop in Local mode</summary>
+        <p>Start the server with <code>.\start-cctv-https.ps1</code> on this laptop. Copy
+            <code>%USERPROFILE%\.cctv\local-development.cer</code> to the second laptop and import it into the Current User
+            Trusted Root Certification Authorities store. Then open
+            <code>https://SERVER-IP:8443/camera-sender.html</code>. The browser will prompt to allow camera access.</p>
+        <p>This development certificate is for your trusted local network only. Detailed certificate import and IP-change steps
+            are in the project <code>HELP.md</code>.</p>
+    </details>
+    <div class="controls">
+        <button id="record" type="button" aria-pressed="false">Start recording</button>
+        <button id="audio" type="button" aria-pressed="false">Enable live audio</button>
+        <button id="shutdown" type="button">Stop server</button>
+        <div class="zoom-controls" role="group" aria-label="Video zoom controls">
+            <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+            <input id="zoom" type="range" min="1" max="4" step="0.25" value="1"
+                   aria-label="Video zoom level">
+            <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+            <span id="zoom-level" aria-live="polite">100%</span>
+        </div>
+        <div class="picture-controls" role="group" aria-label="Picture adjustments">
+            <label class="picture-control" for="brightness">
+                Brightness
+                <input id="brightness" type="range" min="70" max="150" step="5" value="105">
+                <output id="brightness-level" for="brightness">105%</output>
+            </label>
+            <label class="picture-control" for="contrast">
+                Contrast
+                <input id="contrast" type="range" min="70" max="150" step="5" value="110">
+                <output id="contrast-level" for="contrast">110%</output>
+            </label>
+        </div>
+        <span id="status" role="status" aria-live="polite">Live stream ready.</span>
+    </div>
+    <p class="hint">Each camera is saved separately as its own 10-minute MP4 clips on this server. Enable live audio to hear and record audio from this laptop's microphone. The second laptop's camera page must stay open while sharing.</p>
+</main>
+<script>
+    const image = document.getElementById('stream');
+    const button = document.getElementById('record');
+    const audioButton = document.getElementById('audio');
+    const shutdownButton = document.getElementById('shutdown');
+    const zoomSlider = document.getElementById('zoom');
+    const zoomOutButton = document.getElementById('zoom-out');
+    const zoomInButton = document.getElementById('zoom-in');
+    const zoomLevel = document.getElementById('zoom-level');
+    const brightnessSlider = document.getElementById('brightness');
+    const brightnessLevel = document.getElementById('brightness-level');
+    const contrastSlider = document.getElementById('contrast');
+    const contrastLevel = document.getElementById('contrast-level');
+    const status = document.getElementById('status');
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    let recorder;
+    let chunks = [];
+    let animationFrame;
+    let audioContext;
+    let audioDestination;
+    let audioSocket;
+    let nextAudioTime = 0;
+    let audioReadyPromise;
+
+    function setZoom(value) {
+        const zoom = Math.min(Number(zoomSlider.max), Math.max(Number(zoomSlider.min), value));
+        zoomSlider.value = zoom;
+        image.style.transform = `scale(${zoom})`;
+        zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+        zoomOutButton.disabled = zoom <= Number(zoomSlider.min);
+        zoomInButton.disabled = zoom >= Number(zoomSlider.max);
+    }
+
+    zoomSlider.addEventListener('input', () => setZoom(Number(zoomSlider.value)));
+    zoomOutButton.addEventListener('click', () => setZoom(Number(zoomSlider.value) - 0.25));
+    zoomInButton.addEventListener('click', () => setZoom(Number(zoomSlider.value) + 0.25));
+    setZoom(Number(zoomSlider.value));
+
+    function setPictureAdjustments() {
+        const brightness = Number(brightnessSlider.value);
+        const contrast = Number(contrastSlider.value);
+        image.style.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
+        brightnessLevel.value = `${brightness}%`;
+        contrastLevel.value = `${contrast}%`;
+    }
+
+    brightnessSlider.addEventListener('input', setPictureAdjustments);
+    contrastSlider.addEventListener('input', setPictureAdjustments);
+    setPictureAdjustments();
+
+    function closeLiveAudio() {
+        if (audioSocket) {
+            audioSocket.close();
+            audioSocket = null;
+        }
+        if (audioContext) {
+            audioContext.close();
+            audioContext = null;
+        }
+        audioDestination = null;
+        audioReadyPromise = null;
+        audioButton.textContent = 'Enable live audio';
+        audioButton.setAttribute('aria-pressed', 'false');
+    }
+
+    function enableLiveAudio() {
+        if (audioReadyPromise) {
+            return audioReadyPromise;
+        }
+
+        audioButton.disabled = true;
+        status.textContent = 'Connecting to the server microphone…';
+        audioReadyPromise = (async () => {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) {
+                throw new Error('Live audio is not supported by this browser.');
+            }
+
+            audioContext = new AudioContextClass();
+            await audioContext.resume();
+            audioDestination = audioContext.createMediaStreamDestination();
+            nextAudioTime = audioContext.currentTime;
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            audioSocket = new WebSocket(`${protocol}//${window.location.host}/audio`);
+            audioSocket.binaryType = 'arraybuffer';
+
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('Timed out connecting to the microphone.')), 10_000);
+                audioSocket.addEventListener('open', () => {
+                    audioSocket.addEventListener('message', event => {
+                        if (typeof event.data === 'string') {
+                            clearTimeout(timeout);
+                            reject(new Error(event.data.replace(/^ERROR:/, '')));
+                            return;
+                        }
+
+                        const samples = new Int16Array(event.data);
+                        const audioBuffer = audioContext.createBuffer(1, samples.length, 48_000);
+                        const channel = audioBuffer.getChannelData(0);
+                        for (let index = 0; index < samples.length; index++) {
+                            channel[index] = samples[index] / 32768;
+                        }
+
+                        const source = audioContext.createBufferSource();
+                        source.buffer = audioBuffer;
+                        source.connect(audioContext.destination);
+                        source.connect(audioDestination);
+                        const startAt = Math.max(audioContext.currentTime + 0.04, nextAudioTime);
+                        source.start(startAt);
+                        nextAudioTime = startAt + audioBuffer.duration;
+
+                        clearTimeout(timeout);
+                        resolve();
+                    }, { once: false });
+                }, { once: true });
+                audioSocket.addEventListener('error', () => {
+                    clearTimeout(timeout);
+                    reject(new Error('Could not connect to the server microphone.'));
+                }, { once: true });
+                audioSocket.addEventListener('close', () => {
+                    if (audioButton.getAttribute('aria-pressed') === 'true') {
+                        if (recorder && recorder.state === 'recording') {
+                            recorder.stop();
+                            button.textContent = 'Start recording';
+                            button.setAttribute('aria-pressed', 'false');
+                        }
+                        audioButton.disabled = false;
+                        closeLiveAudio();
+                        status.textContent = 'Live audio connection was closed.';
+                    }
+                }, { once: true });
+            });
+
+            audioButton.textContent = 'Disable live audio';
+            audioButton.setAttribute('aria-pressed', 'true');
+            status.textContent = 'Live audio connected.';
+        })().catch(error => {
+            closeLiveAudio();
+            throw error;
+        }).finally(() => {
+            audioButton.disabled = false;
+        });
+        return audioReadyPromise;
+    }
+
+    audioButton.addEventListener('click', async () => {
+        if (audioButton.getAttribute('aria-pressed') === 'true') {
+            closeLiveAudio();
+            status.textContent = 'Live audio disabled.';
+            return;
+        }
+        try {
+            await enableLiveAudio();
+        } catch (error) {
+            status.textContent = error.message;
+        }
+    });
+
+    shutdownButton.addEventListener('click', async () => {
+        if (!window.confirm('Stop the CCTV server for all connected viewers? It must be restarted manually.')) {
+            return;
+        }
+
+        shutdownButton.disabled = true;
+        status.textContent = 'Stopping the CCTV server…';
+        try {
+            const csrfResponse = await fetch('/csrf');
+            if (!csrfResponse.ok) {
+                throw new Error('Could not retrieve the security token.');
+            }
+            const { token } = await csrfResponse.json();
+            const shutdownResponse = await fetch('/shutdown', {
+                method: 'POST',
+                headers: { 'X-XSRF-TOKEN': token }
+            });
+            if (!shutdownResponse.ok) {
+                throw new Error('The server did not accept the shutdown request.');
+            }
+            status.textContent = 'The CCTV server is shutting down.';
+        } catch (error) {
+            shutdownButton.disabled = false;
+            status.textContent = `${error.message} Please try again.`;
+        }
+    });
+
+    function copyFrame() {
+        if (image.complete && image.naturalWidth > 0) {
+            if (canvas.width !== image.naturalWidth || canvas.height !== image.naturalHeight) {
+                canvas.width = image.naturalWidth;
+                canvas.height = image.naturalHeight;
+            }
+            context.filter = getComputedStyle(image).filter;
+            context.drawImage(image, 0, 0, canvas.width, canvas.height);
+            context.filter = 'none';
+        }
+        animationFrame = requestAnimationFrame(copyFrame);
+    }
+
+    image.addEventListener('load', () => {
+        if (!animationFrame) {
+            copyFrame();
+        }
+    });
+
+    image.addEventListener('error', () => {
+        status.textContent = 'Could not load the camera stream.';
+    });
+
+    function recordingMimeType() {
+        if (!window.MediaRecorder) {
+            return '';
+        }
+        return [
+            'video/mp4;codecs=avc1.42E01E',
+            'video/mp4',
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm'
+        ].find(type => MediaRecorder.isTypeSupported(type)) || '';
+    }
+
+    function downloadRecording(blob, extension) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `cctv-recording-${timestamp}.${extension}`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    }
+
+    async function saveRecording() {
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
+        chunks = [];
+        if (!blob.size) {
+            status.textContent = 'No video data was recorded.';
+            return;
+        }
+
+        if (blob.type.includes('mp4')) {
+            downloadRecording(blob, 'mp4');
+            status.textContent = 'MP4 recording saved to this device.';
+            return;
+        }
+
+        status.textContent = 'Converting recording to MP4 for better device compatibility…';
+        try {
+            const csrfResponse = await fetch('/csrf');
+            if (!csrfResponse.ok) {
+                throw new Error('Could not retrieve the security token.');
+            }
+            const { token } = await csrfResponse.json();
+            const form = new FormData();
+            form.append('recording', blob, 'cctv-recording.webm');
+            const response = await fetch('/recordings/mp4', {
+                method: 'POST',
+                headers: { 'X-XSRF-TOKEN': token },
+                body: form
+            });
+            if (!response.ok) {
+                const message = await response.text();
+                throw new Error(message || 'The server could not convert this recording.');
+            }
+
+            const mp4 = await response.blob();
+            if (!mp4.size || !mp4.type.includes('mp4')) {
+                throw new Error('The server returned an invalid MP4 recording.');
+            }
+            downloadRecording(mp4, 'mp4');
+            status.textContent = 'Compatible MP4 recording saved to this device.';
+        } catch (error) {
+            downloadRecording(blob, 'webm');
+            status.textContent = `MP4 conversion failed; the original WebM was saved instead. ${error.message}`;
+        }
+    }
+
+    button.addEventListener('click', async () => {
+        if (recorder && recorder.state === 'recording') {
+            recorder.stop();
+            button.textContent = 'Start recording';
+            button.setAttribute('aria-pressed', 'false');
+            audioButton.disabled = false;
+            status.textContent = 'Preparing your video…';
+            return;
+        }
+
+        if (!window.MediaRecorder || typeof canvas.captureStream !== 'function') {
+            status.textContent = 'Recording is not supported by this browser.';
+            return;
+        }
+        if (!canvas.width || !canvas.height) {
+            status.textContent = 'Waiting for the camera stream…';
+            return;
+        }
+
+        try {
+            await enableLiveAudio();
+            const mimeType = recordingMimeType();
+            const videoBitrate = Math.round(Math.max(
+                8_000_000,
+                Math.min(60_000_000, canvas.width * canvas.height * 30 * 0.3)
+            ));
+            const options = { videoBitsPerSecond: videoBitrate };
+            if (mimeType) {
+                options.mimeType = mimeType;
+            }
+            const recordingStream = canvas.captureStream(30);
+            for (const track of audioDestination.stream.getAudioTracks()) {
+                recordingStream.addTrack(track);
+            }
+            recorder = new MediaRecorder(recordingStream, options);
+            chunks = [];
+            recorder.addEventListener('dataavailable', event => {
+                if (event.data.size > 0) {
+                    chunks.push(event.data);
+                }
+            });
+            recorder.addEventListener('stop', saveRecording, { once: true });
+            recorder.addEventListener('error', () => {
+                status.textContent = 'Recording failed. Please try again.';
+                button.textContent = 'Start recording';
+                button.setAttribute('aria-pressed', 'false');
+                audioButton.disabled = false;
+            }, { once: true });
+            recorder.start(1000);
+            button.textContent = 'Stop recording';
+            button.setAttribute('aria-pressed', 'true');
+            audioButton.disabled = true;
+            status.textContent = `Recording ${canvas.width}×${canvas.height} with live audio at up to ${Math.round(videoBitrate / 1_000_000)} Mbps…`;
+        } catch (error) {
+            audioButton.disabled = false;
+            status.textContent = `Could not start recording: ${error.message}`;
+        }
+    });
+</script>
+</body>
+</html>
